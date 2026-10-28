@@ -1,0 +1,8 @@
+[
+  {"title": "AI 应用开发实习生", "company": "某 AI 创业公司", "skills": ["Python", "LangChain", "Prompt"], "min_years": 1},
+  {"title": "Java 后端开发", "company": "某电商平台", "skills": ["Java", "Spring Boot", "MySQL"], "min_years": 2},
+  {"title": "数据分析师", "company": "某零售集团", "skills": ["Python", "SQL", "Excel"], "min_years": 1},
+  {"title": "前端工程师（React）", "company": "某 SaaS 公司", "skills": ["React", "TypeScript"], "min_years": 2},
+  {"title": "Python 后端", "company": "某工具类产品", "skills": ["Python", "MySQL", "Redis"], "min_years": 1},
+  {"title": "AI 产品经理", "company": "某大厂", "skills": ["Python", "Prompt", "数据分析"], "min_years": 0}
+]
