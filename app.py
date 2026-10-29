@@ -93,6 +93,12 @@ if st.button("开始分析", type="primary", use_container_width=True):
 
         if data is None:
             st.error("解析失败，模型没有返回合法 JSON，请再试一次。")
+        elif not data.get("name") and not data.get("skills"):
+            st.warning(
+                "没有从这段文字里识别到简历信息。\n\n"
+                "请粘贴简历正文（包含姓名、经历、技能等），而不是无关内容。"
+            )
+            st.stop()
         else:
             st.success(f"解析完成：{data.get('name') or '（未识别姓名）'}")
 
