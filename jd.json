@@ -1,8 +1,22 @@
 [
   {"title": "AI 应用开发实习生", "company": "某 AI 创业公司", "skills": ["Python", "LangChain", "Prompt"], "min_years": 1},
-  {"title": "Java 后端开发", "company": "某电商平台", "skills": ["Java", "Spring Boot", "MySQL"], "min_years": 2},
-  {"title": "数据分析师", "company": "某零售集团", "skills": ["Python", "SQL", "Excel"], "min_years": 1},
-  {"title": "前端工程师（React）", "company": "某 SaaS 公司", "skills": ["React", "TypeScript"], "min_years": 2},
-  {"title": "Python 后端", "company": "某工具类产品", "skills": ["Python", "MySQL", "Redis"], "min_years": 1},
-  {"title": "AI 产品经理", "company": "某大厂", "skills": ["Python", "Prompt", "数据分析"], "min_years": 0}
+  {"title": "大模型应用工程师", "company": "某智能客服公司", "skills": ["Python", "RAG", "Prompt", "LangChain"], "min_years": 2},
+  {"title": "AI Agent 开发", "company": "某效率工具团队", "skills": ["Python", "Function Calling", "Prompt"], "min_years": 1},
+  {"title": "LLM 算法工程师", "company": "某大模型公司", "skills": ["Python", "PyTorch", "Transformer", "微调"], "min_years": 3},
+  {"title": "AI 产品经理", "company": "某大厂", "skills": ["Prompt", "数据分析", "需求分析"], "min_years": 1},
+  {"title": "数据分析师", "company": "某零售集团", "skills": ["Python", "SQL", "Excel", "数据分析"], "min_years": 1},
+  {"title": "数据开发工程师", "company": "某金融科技", "skills": ["SQL", "Python", "Spark", "数据仓库"], "min_years": 2},
+  {"title": "Java 后端开发", "company": "某电商平台", "skills": ["Java", "Spring Boot", "MySQL", "Redis"], "min_years": 2},
+  {"title": "Python 后端工程师", "company": "某 SaaS 公司", "skills": ["Python", "MySQL", "Redis", "FastAPI"], "min_years": 1},
+  {"title": "Go 后端开发", "company": "某云服务公司", "skills": ["Go", "MySQL", "Redis", "Kubernetes"], "min_years": 2},
+  {"title": "前端工程师（React）", "company": "某 SaaS 公司", "skills": ["React", "TypeScript", "CSS"], "min_years": 2},
+  {"title": "全栈开发工程师", "company": "某创业团队", "skills": ["Python", "React", "MySQL", "Docker"], "min_years": 2},
+  {"title": "算法工程师（推荐）", "company": "某内容平台", "skills": ["Python", "机器学习", "SQL", "推荐系统"], "min_years": 3},
+  {"title": "NLP 算法工程师", "company": "某 AI 公司", "skills": ["Python", "NLP", "PyTorch", "Transformer"], "min_years": 2},
+  {"title": "机器学习实习生", "company": "某研究院", "skills": ["Python", "PyTorch", "机器学习"], "min_years": 0},
+  {"title": "AI 解决方案工程师", "company": "某云厂商", "skills": ["Python", "Prompt", "客户沟通", "方案设计"], "min_years": 2},
+  {"title": "AI 交付工程师", "company": "某 AI 服务商", "skills": ["Python", "Linux", "Prompt", "Docker"], "min_years": 1},
+  {"title": "测试开发工程师", "company": "某互联网公司", "skills": ["Python", "自动化测试", "Linux"], "min_years": 1},
+  {"title": "运维开发工程师", "company": "某云服务公司", "skills": ["Python", "Linux", "Shell", "Docker"], "min_years": 2},
+  {"title": "产品经理（AI 方向）", "company": "某教育科技", "skills": ["需求分析", "数据分析", "Prompt"], "min_years": 2}
 ]
