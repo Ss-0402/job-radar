@@ -1,5 +1,7 @@
-# 岗位雷达 v3.6 · 部署版
+# 岗位雷达 v3.7 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
+#
+# v3.7：公开上线后的花钱防护——同一份简历只解析一次、单会话限次、每日总额度。
 #
 # 运行（本地）：streamlit run app.py
 # 部署：推送到 GitHub，Streamlit Cloud 自动重建
@@ -7,6 +9,7 @@
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -14,6 +17,16 @@ from openai import OpenAI
 
 HERE = Path(__file__).resolve().parent
 DATA_FILE = HERE / "jd.json"
+
+# ============================================================
+# 花钱防护参数（app 公开后，任何访问者都能点「AI 解析」）
+# ============================================================
+MAX_CHARS_IN = 6000      # 送模型的简历最多截这么长，控制单次 token
+MAX_TOKENS_OUT = 400     # 模型输出上限（JSON 很短，400 足够）
+REQ_TIMEOUT = 20         # 单次请求超时，免得用户干等
+PER_SESSION_CAP = 5      # 一个浏览器会话最多成功调几次
+DAILY_CAP = 100          # 整个 app 每天最多调几次（防换会话刷）
+QUOTA_FILE = HERE / ".ai_quota.json"
 
 # ============================================================
 # 一、API Key（云端来自 Secrets，本地来自环境变量）
@@ -59,9 +72,11 @@ def llm_extract(text: str):
                     '字段：name（字符串）、years（整数）、skills（字符串数组）、direction（字符串）。'
                     "缺失字段用空字符串、0 或 [] 表示，不要编造。"
                 )},
-                {"role": "user", "content": text},
+                {"role": "user", "content": text[:MAX_CHARS_IN]},
             ],
             temperature=0,
+            max_tokens=MAX_TOKENS_OUT,
+            timeout=REQ_TIMEOUT,
         )
         data = json.loads(r.choices[0].message.content)
         # 模型偶尔给中文键，做一次兜底映射
@@ -71,6 +86,46 @@ def llm_extract(text: str):
         return data
     except Exception:
         return None
+
+
+# ============================================================
+# 额度记账：每天一个新计数，写在 .ai_quota.json（已在 .gitignore）
+# 写文件失败就放行——宁可多花几毛钱，也别让页面报错。
+# ============================================================
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def quota_used_today() -> int:
+    try:
+        data = json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if data.get("date") != _today():
+        return 0
+    try:
+        return int(data.get("count", 0))
+    except Exception:
+        return 0
+
+
+def quota_left() -> int:
+    return max(DAILY_CAP - quota_used_today(), 0)
+
+
+def quota_take() -> bool:
+    """占一次额度。并发下可能少记几次，够用就行。"""
+    used = quota_used_today()
+    if used >= DAILY_CAP:
+        return False
+    try:
+        QUOTA_FILE.write_text(
+            json.dumps({"date": _today(), "count": used + 1}), encoding="utf-8"
+        )
+    except Exception:
+        pass
+    return True
 
 
 def highlight(text: str, skills) -> str:
@@ -99,6 +154,10 @@ if "favs" not in st.session_state:
     st.session_state.favs = set()
 if "parsed" not in st.session_state:
     st.session_state.parsed = None      # AI 解析结果，避免重复花钱
+if "parsed_text" not in st.session_state:
+    st.session_state.parsed_text = ""   # 已经解析过的原文，同一份不再花钱
+if "ai_calls" not in st.session_state:
+    st.session_state.ai_calls = 0       # 本会话已调用次数
 
 # ============================================================
 # 五、侧边栏
@@ -119,15 +178,34 @@ with st.sidebar:
                 st.warning("先粘贴简历")
             elif client is None:
                 st.warning("未配置 API Key，只能用规则匹配")
+            elif st.session_state.parsed and st.session_state.parsed_text == resume_text:
+                st.info("这份简历已经解析过，直接复用上次结果（不再花钱）")
+            elif st.session_state.ai_calls >= PER_SESSION_CAP:
+                st.warning(f"本会话已达 {PER_SESSION_CAP} 次上限，已改用规则匹配")
+            elif not quota_take():
+                st.warning("今日 AI 解析额度已用完，已改用规则匹配")
             else:
+                st.session_state.ai_calls += 1
                 with st.spinner("解析中……"):
-                    st.session_state.parsed = llm_extract(resume_text)
-                if st.session_state.parsed is None:
+                    parsed = llm_extract(resume_text)
+                if parsed:
+                    st.session_state.parsed = parsed
+                    st.session_state.parsed_text = resume_text
+                else:
                     st.error("解析失败，已退回规则匹配")
     with col_b:
         if st.button("清空", use_container_width=True):
             st.session_state.parsed = None
+            st.session_state.parsed_text = ""
             st.rerun()
+
+    if client is None:
+        st.caption("未配置 API Key：只用规则匹配，不发请求。")
+    else:
+        left_session = max(PER_SESSION_CAP - st.session_state.ai_calls, 0)
+        st.caption(
+            f"AI 解析每份简历 1 次 · 本会话剩 {left_session} 次 · 今日剩 {quota_left()} 次"
+        )
 
     if st.session_state.parsed:
         my_skills = set(st.session_state.parsed.get("skills", []))
