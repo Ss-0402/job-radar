@@ -1,7 +1,8 @@
-# 岗位雷达 v3.7 · 部署版
+# 岗位雷达 v3.9 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
-# v3.7：公开上线后的花钱防护——同一份简历只解析一次、单会话限次、每日总额度。
+# v3.9：加 Google 登录（st.login），AI 解析按账号计费——每人每天 3 次免费。
+# v3.7：同一份简历只解析一次、全站每日总额度、输入截断与超时。
 #
 # 运行（本地）：streamlit run app.py
 # 部署：推送到 GitHub，Streamlit Cloud 自动重建
@@ -9,24 +10,26 @@
 import json
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 from openai import OpenAI
 
+import quota
+
 HERE = Path(__file__).resolve().parent
 DATA_FILE = HERE / "jd.json"
 
 # ============================================================
-# 花钱防护参数（app 公开后，任何访问者都能点「AI 解析」）
+# 参数
 # ============================================================
 MAX_CHARS_IN = 6000      # 送模型的简历最多截这么长，控制单次 token
 MAX_TOKENS_OUT = 400     # 模型输出上限（JSON 很短，400 足够）
 REQ_TIMEOUT = 20         # 单次请求超时，免得用户干等
-PER_SESSION_CAP = 5      # 一个浏览器会话最多成功调几次
-DAILY_CAP = 100          # 整个 app 每天最多调几次（防换会话刷）
-QUOTA_FILE = HERE / ".ai_quota.json"
+FREE_PER_DAY = 3         # 每个登录账号每天免费解析次数
+DAILY_CAP = 100          # 全站每天总次数，兜底防刷
+# 额度文件路径可用环境变量覆盖（测试、或挂载持久卷时用）
+QUOTA_FILE = Path(os.getenv("JOB_RADAR_QUOTA_FILE") or (HERE / ".ai_quota.json"))
 
 # ============================================================
 # 一、API Key（云端来自 Secrets，本地来自环境变量）
@@ -88,46 +91,6 @@ def llm_extract(text: str):
         return None
 
 
-# ============================================================
-# 额度记账：每天一个新计数，写在 .ai_quota.json（已在 .gitignore）
-# 写文件失败就放行——宁可多花几毛钱，也别让页面报错。
-# ============================================================
-
-def _today() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def quota_used_today() -> int:
-    try:
-        data = json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return 0
-    if data.get("date") != _today():
-        return 0
-    try:
-        return int(data.get("count", 0))
-    except Exception:
-        return 0
-
-
-def quota_left() -> int:
-    return max(DAILY_CAP - quota_used_today(), 0)
-
-
-def quota_take() -> bool:
-    """占一次额度。并发下可能少记几次，够用就行。"""
-    used = quota_used_today()
-    if used >= DAILY_CAP:
-        return False
-    try:
-        QUOTA_FILE.write_text(
-            json.dumps({"date": _today(), "count": used + 1}), encoding="utf-8"
-        )
-    except Exception:
-        pass
-    return True
-
-
 def highlight(text: str, skills) -> str:
     """JD 里出现的技能词标成橙色加粗。"""
     out = text
@@ -148,6 +111,73 @@ def match_score(job, mine):
 
 
 # ============================================================
+# 登录（Google OIDC）与额度
+# ============================================================
+
+def _auth_configured() -> bool:
+    """secrets 里配了 [auth] 才算开启登录；没配就降级成本地匿名模式。"""
+    try:
+        auth = st.secrets.get("auth")
+    except Exception:
+        return False
+    return bool(auth) and bool(auth.get("client_id"))
+
+
+# JOB_RADAR_FORCE_AUTH=1 可以在没配 Google 的情况下本地预览登录页
+AUTH_ON = _auth_configured() or os.getenv("JOB_RADAR_FORCE_AUTH") == "1"
+
+
+def _logged_in() -> bool:
+    try:
+        return bool(st.user.is_logged_in)
+    except Exception:
+        return False
+
+
+def _user_identity() -> str:
+    """额度主键：登录后用邮箱，本地匿名模式固定一个键。"""
+    if not AUTH_ON:
+        return "local-anonymous"
+    if not _logged_in():
+        return ""
+    try:
+        email = (st.user.email or "").strip().lower()
+    except Exception:
+        email = ""
+    if email:
+        return email
+    try:
+        sub = st.user.get("sub") or ""
+    except Exception:
+        sub = ""
+    return f"uid:{sub}" if sub else ""
+
+
+def _login_page() -> None:
+    st.markdown("# 🎯 岗位雷达")
+    st.caption("上传简历，AI 抽出技能，按匹配度给 60 条岗位排序")
+    st.markdown(
+        f"""
+- 每个账号每天 **{FREE_PER_DAY} 次**免费 AI 解析，次日 0 点恢复
+- 次数用完不影响使用：规则匹配照常工作，不限次
+- 登录只用于识别账号、计算次数，不会读取你的邮件或其他数据
+"""
+    )
+    if st.button("使用 Google 登录", type="primary"):
+        try:
+            st.login()
+        except Exception as exc:   # 多半是 secrets 没配全，或者依赖没装
+            st.error(f"登录启动失败：{exc}")
+
+
+if AUTH_ON and not _logged_in():
+    _login_page()
+    st.stop()
+
+USER = _user_identity() or "anonymous"
+
+
+# ============================================================
 # 四、会话状态
 # ============================================================
 if "favs" not in st.session_state:
@@ -156,13 +186,18 @@ if "parsed" not in st.session_state:
     st.session_state.parsed = None      # AI 解析结果，避免重复花钱
 if "parsed_text" not in st.session_state:
     st.session_state.parsed_text = ""   # 已经解析过的原文，同一份不再花钱
-if "ai_calls" not in st.session_state:
-    st.session_state.ai_calls = 0       # 本会话已调用次数
 
 # ============================================================
 # 五、侧边栏
 # ============================================================
 with st.sidebar:
+    if AUTH_ON:
+        st.caption(f"👤 {USER}")
+        if st.button("退出登录", use_container_width=True, key="logout"):
+            st.logout()
+    else:
+        st.caption("🔧 本地模式：未配置 [auth]，额度记在匿名键上")
+
     st.header("📄 我的简历")
 
     uploaded = st.file_uploader("上传 .txt", type=["txt"])
@@ -180,12 +215,12 @@ with st.sidebar:
                 st.warning("未配置 API Key，只能用规则匹配")
             elif st.session_state.parsed and st.session_state.parsed_text == resume_text:
                 st.info("这份简历已经解析过，直接复用上次结果（不再花钱）")
-            elif st.session_state.ai_calls >= PER_SESSION_CAP:
-                st.warning(f"本会话已达 {PER_SESSION_CAP} 次上限，已改用规则匹配")
-            elif not quota_take():
-                st.warning("今日 AI 解析额度已用完，已改用规则匹配")
+            elif not quota.try_take(QUOTA_FILE, USER, FREE_PER_DAY, DAILY_CAP):
+                st.warning(
+                    f"今天的 {FREE_PER_DAY} 次免费额度已用完，明天 0 点恢复。"
+                    "规则匹配不受影响，可以继续用。"
+                )
             else:
-                st.session_state.ai_calls += 1
                 with st.spinner("解析中……"):
                     parsed = llm_extract(resume_text)
                 if parsed:
@@ -202,10 +237,8 @@ with st.sidebar:
     if client is None:
         st.caption("未配置 API Key：只用规则匹配，不发请求。")
     else:
-        left_session = max(PER_SESSION_CAP - st.session_state.ai_calls, 0)
-        st.caption(
-            f"AI 解析每份简历 1 次 · 本会话剩 {left_session} 次 · 今日剩 {quota_left()} 次"
-        )
+        left = quota.remaining(QUOTA_FILE, USER, FREE_PER_DAY)
+        st.caption(f"今日免费 AI 解析剩余 {left} / {FREE_PER_DAY} 次")
 
     if st.session_state.parsed:
         my_skills = set(st.session_state.parsed.get("skills", []))
