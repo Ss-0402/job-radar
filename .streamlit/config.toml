@@ -1,0 +1,5 @@
+# Streamlit 服务端配置
+# app 公开后任何访问者都能上传文件，默认上限 200MB 会先把整个文件读进内存，
+# 免费版容器只有 1GB，几个并发就能把进程打挂。简历 txt 几 KB 就够，收到 5MB。
+[server]
+maxUploadSize = 5
