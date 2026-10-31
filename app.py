@@ -176,6 +176,12 @@ if AUTH_ON and not _logged_in():
 
 USER = _user_identity() or "anonymous"
 
+if not AUTH_ON:
+    st.warning(
+        "未配置 Google 登录（Secrets 里缺 [auth]），当前所有人共用一个匿名额度，"
+        "不按账号限制。正式环境请补上 [auth] 配置。"
+    )
+
 
 # ============================================================
 # 四、会话状态
