@@ -1,6 +1,7 @@
-# 岗位雷达 v4.3 · 部署版
+# 岗位雷达 v4.6 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
+# v4.6：主区改成分页 + JD 弹窗，单次渲染元素从 ~600 降到 ~70，交互明显变快。
 # v4.5：登录凭证存进浏览器 sessionStorage（刷新保留 / 关标签页即退出，不进地址栏）。
 # v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
 # v4.1：整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
@@ -38,6 +39,7 @@ MAX_TOKENS_OUT = 400     # 模型输出上限（JSON 很短，400 足够）
 REQ_TIMEOUT = 20         # 单次请求超时，免得用户干等
 FREE_PER_DAY = 3         # 每个登录账号每天免费解析次数
 DAILY_CAP = 100          # 全站每天总次数，兜底防刷
+PAGE_SIZE = 10           # 列表一次渲染多少张卡（多了浏览器会明显卡）
 # 额度文件路径可用环境变量覆盖（测试、或挂载持久卷时用）
 QUOTA_FILE = Path(os.getenv("JOB_RADAR_QUOTA_FILE") or (HERE / ".ai_quota.json"))
 USERS_FILE = Path(os.getenv("JOB_RADAR_USERS_FILE") or (HERE / ".users.json"))
@@ -128,7 +130,7 @@ def match_score(job, mine):
 # ============================================================
 
 TOKEN_HOURS = 12                 # 凭证兜底有效期
-BUILD_TAG = "v4.5"               # 版本标记：用来确认线上跑的是哪一版
+BUILD_TAG = "v4.6"               # 版本标记：用来确认线上跑的是哪一版
 STORAGE_ENABLED = os.getenv("JOB_RADAR_STORAGE", "on") != "off"
 
 if "user" not in st.session_state:
@@ -309,85 +311,94 @@ if "parsed" not in st.session_state:
     st.session_state.parsed = None      # AI 解析结果，避免重复花钱
 if "parsed_text" not in st.session_state:
     st.session_state.parsed_text = ""   # 已经解析过的原文，同一份不再花钱
+if "shown" not in st.session_state:
+    st.session_state.shown = PAGE_SIZE  # 列表分页：一次只渲染这么多张卡
 
 # ============================================================
 # 五、侧边栏
 # ============================================================
 with st.sidebar:
-    st.caption(f"👤 {users.display_name(USERS_FILE, USER)}")
-    if st.button("退出登录", use_container_width=True, key="logout"):
-        st.session_state.user = None
-        st.session_state.just_logged_out = True
-        st.rerun()
-    st.caption(f"构建 {BUILD_TAG}")
-
-    st.header("📄 我的简历")
-
-    uploaded = st.file_uploader("上传简历（txt / docx / pdf）", type=docs.SUPPORTED)
-    resume_text = st.text_area("或直接粘贴", height=160,
-                               placeholder="把技能、项目经历粘进来……")
-    if uploaded is not None:
-        ok, text_or_msg = docs.to_text(uploaded.name, uploaded.getvalue())
-        if ok:
-            resume_text = text_or_msg
-        else:
-            st.error(text_or_msg)
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("AI 解析", use_container_width=True, help="调用大模型，约一分钱"):
-            if not resume_text.strip():
-                st.warning("先粘贴简历")
-            elif client is None:
-                st.warning("未配置 API Key，只能用规则匹配")
-            elif st.session_state.parsed and st.session_state.parsed_text == resume_text:
-                st.info("这份简历已经解析过，直接复用上次结果（不再花钱）")
-            elif not quota.try_take(QUOTA_FILE, USER, FREE_PER_DAY, DAILY_CAP):
-                st.warning(
-                    f"今天的 {FREE_PER_DAY} 次免费额度已用完，明天 0 点恢复。"
-                    "规则匹配不受影响，可以继续用。"
-                )
-            else:
-                with st.spinner("解析中……"):
-                    parsed = llm_extract(resume_text)
-                if parsed:
-                    st.session_state.parsed = parsed
-                    st.session_state.parsed_text = resume_text
-                else:
-                    st.error("解析失败，已退回规则匹配")
-    with col_b:
-        if st.button("清空", use_container_width=True):
-            st.session_state.parsed = None
-            st.session_state.parsed_text = ""
+    top_left, top_right = st.columns([3, 2])
+    with top_left:
+        st.caption(f"👤 {users.display_name(USERS_FILE, USER)}")
+    with top_right:
+        if st.button("退出", use_container_width=True, key="logout"):
+            st.session_state.user = None
+            st.session_state.just_logged_out = True
             st.rerun()
 
-    if client is None:
-        st.caption("未配置 API Key：只用规则匹配，不发请求。")
-    else:
-        left = quota.remaining(QUOTA_FILE, USER, FREE_PER_DAY)
-        st.caption(f"今日免费 AI 解析剩余 {left} / {FREE_PER_DAY} 次")
+    with st.expander("📄 简历", expanded=True):
+        tab_paste, tab_upload = st.tabs(["粘贴", "上传"])
+        with tab_paste:
+            pasted = st.text_area("简历正文", height=140, key="resume_paste",
+                                  label_visibility="collapsed",
+                                  placeholder="把技能、项目经历粘进来……")
+        with tab_upload:
+            uploaded = st.file_uploader("txt / docx / pdf", type=docs.SUPPORTED,
+                                        label_visibility="collapsed")
+
+        resume_text = pasted or ""
+        if uploaded is not None:
+            ok, text_or_msg = docs.to_text(uploaded.name, uploaded.getvalue())
+            if ok:
+                resume_text = text_or_msg
+            else:
+                st.error(text_or_msg)
+
+        btn_parse, btn_clear = st.columns(2)
+        with btn_parse:
+            if st.button("AI 解析", use_container_width=True, type="primary",
+                         help="调用大模型，约一分钱"):
+                if not resume_text.strip():
+                    st.warning("先粘贴简历")
+                elif client is None:
+                    st.warning("未配置 API Key，只能用规则匹配")
+                elif st.session_state.parsed and st.session_state.parsed_text == resume_text:
+                    st.info("这份简历已经解析过，直接复用结果（不再花钱）")
+                elif not quota.try_take(QUOTA_FILE, USER, FREE_PER_DAY, DAILY_CAP):
+                    st.warning(
+                        f"今天的 {FREE_PER_DAY} 次免费额度已用完，明天 0 点恢复。"
+                        "规则匹配不受影响。"
+                    )
+                else:
+                    with st.spinner("解析中……"):
+                        parsed = llm_extract(resume_text)
+                    if parsed:
+                        st.session_state.parsed = parsed
+                        st.session_state.parsed_text = resume_text
+                    else:
+                        st.error("解析失败，已退回规则匹配")
+        with btn_clear:
+            if st.button("清空", use_container_width=True):
+                st.session_state.parsed = None
+                st.session_state.parsed_text = ""
+                st.rerun()
+
+        if client is None:
+            st.caption("未配置 API Key：只用规则匹配。")
+        else:
+            left = quota.remaining(QUOTA_FILE, USER, FREE_PER_DAY)
+            st.caption(f"今日 AI 解析剩余 {left}/{FREE_PER_DAY}")
 
     if st.session_state.parsed:
         my_skills = set(st.session_state.parsed.get("skills", []))
-        st.success(f"AI 识别到 {len(my_skills)} 项技能")
-        if st.session_state.parsed.get("years"):
-            st.caption(f"年限：{st.session_state.parsed['years']}")
+        st.success(f"已识别 {len(my_skills)} 项技能")
     else:
         my_skills = set(rule_extract(resume_text or "")["skills"])
         if my_skills:
-            st.info(f"规则识别到 {len(my_skills)} 项技能（点「AI 解析」更准）")
+            st.caption(f"规则识别到 {len(my_skills)} 项技能（点 AI 解析更准）")
 
     if my_skills:
-        st.write("、".join(sorted(my_skills)))
+        st.caption("、".join(sorted(my_skills)))
 
-    st.divider()
-    st.header("🔍 筛选")
-    dir_options = sorted({j["direction"] for j in JOBS})
-    city_options = sorted({j["city"] for j in JOBS})
+    with st.expander("🔍 筛选", expanded=False):
+        dir_options = sorted({j["direction"] for j in JOBS})
+        city_options = sorted({j["city"] for j in JOBS})
+        sel_dirs = st.multiselect("岗位方向", dir_options)
+        sel_cities = st.multiselect("城市", city_options)
+        sel_degs = st.multiselect("学历要求", ["大专", "本科", "硕士"])
 
-    sel_dirs = st.multiselect("岗位方向", dir_options)
-    sel_cities = st.multiselect("城市", city_options)
-    sel_degs = st.multiselect("学历要求", ["大专", "本科", "硕士"])
+    st.caption(f"构建 {BUILD_TAG}")
 
 # ============================================================
 # 六、筛选
@@ -407,8 +418,16 @@ filtered = [j for j in JOBS if keep(j)]
 # ============================================================
 # 七、主区
 # ============================================================
+@st.dialog("JD 全文", width="large")
+def _jd_dialog(job) -> None:
+    st.markdown(f"**{job['title']}**")
+    st.caption(f"{job['company']} · {job['city']} · {job['degree']} · {job['direction']}")
+    st.markdown(highlight(job["jd"], job["skills"]))
+    st.code(job["jd"], language=None)
+
+
 st.title("🎯 岗位雷达")
-st.caption(f"共 {len(JOBS)} 条岗位 · 筛选 · 查看 JD · 对照简历找差距")
+st.caption(f"{len(JOBS)} 条岗位 · 点「查看 JD」看原文 · 有简历时按匹配度排序")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("符合条件的岗位", len(filtered))
@@ -418,8 +437,7 @@ if my_skills and filtered:
     c3.metric("平均匹配度", f"{avg*100:.0f}%")
 else:
     c3.metric("平均匹配度", "—")
-
-st.divider()
+    st.caption("左侧「📄 简历」里粘贴或上传简历，就能按匹配度排序并看到缺口。")
 
 if not filtered:
     st.warning("没有符合条件的岗位，试试放宽筛选。")
@@ -428,33 +446,40 @@ if not filtered:
 if my_skills:
     filtered.sort(key=lambda j: match_score(j, my_skills)[0], reverse=True)
 
-for job in filtered:
+visible = filtered[: st.session_state.shown]
+
+for job in visible:
     score, have, missing = match_score(job, my_skills) if my_skills else (0, set(), set())
     is_fav = job["id"] in st.session_state.favs
 
     with st.container(border=True):
-        left, right = st.columns([5, 2])
-        with left:
-            st.markdown(f"#### {job['title']}")
-            st.caption(f"{job['company']} · {job['city']} · {job['degree']} · {job['direction']}")
-            st.markdown(" ".join(f"`{s}`" for s in job["skills"]))
-
-            if my_skills:
-                st.progress(min(score, 1.0), text=f"匹配度 {score*100:.0f}%")
-                if have:
-                    st.markdown("✅ **已掌握**：" + "、".join(sorted(have)))
-                if missing:
-                    st.markdown("⚠️ **还缺**：" + "、".join(sorted(missing)))
-        with right:
-            if st.button("★ 已收藏" if is_fav else "☆ 收藏", key=f"fav_{job['id']}",
-                         use_container_width=True):
+        head, tail = st.columns([7, 1])
+        with head:
+            st.markdown(f"**{job['title']}**")
+            st.caption(
+                f"{job['company']} · {job['city']} · {job['degree']} · {job['direction']}"
+                f" · {' '.join(job['skills'])}"
+            )
+        with tail:
+            if st.button("★" if is_fav else "☆", key=f"fav_{job['id']}",
+                         use_container_width=True, help="收藏 / 取消收藏"):
                 st.session_state.favs.symmetric_difference_update({job["id"]})
                 st.rerun()
 
-        with st.expander("查看 JD 全文（关键词已高亮）"):
-            st.markdown(highlight(job["jd"], job["skills"]))
-            st.caption("右上角图标可一键复制：")
-            st.code(job["jd"], language=None)
+        if my_skills:
+            st.progress(min(score, 1.0), text=f"匹配 {score*100:.0f}% · 缺 {len(missing)} 项")
+        if missing:
+            st.caption("⚠️ " + "、".join(sorted(missing)))
+
+        if st.button("查看 JD", key=f"jd_{job['id']}"):
+            _jd_dialog(job)
+
+remaining = len(filtered) - len(visible)
+if remaining > 0:
+    if st.button(f"再看 {min(PAGE_SIZE, remaining)} 条（还有 {remaining} 条）",
+                 use_container_width=True):
+        st.session_state.shown += PAGE_SIZE
+        st.rerun()
 
 st.divider()
 st.caption("数据为模拟岗位，仅用于演示；真实项目请替换 jd.json。")
