@@ -6,5 +6,6 @@
 __pycache__/
 *.pyc
 
-# AI 解析每日额度记账文件（运行时生成）
+# 运行时生成的数据文件（额度记账 + 本地账号库）
 .ai_quota.json
+.users.json
