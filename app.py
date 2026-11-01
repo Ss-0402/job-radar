@@ -1,7 +1,8 @@
-# 岗位雷达 v4.1 · 部署版
+# 岗位雷达 v4.2 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
-# v4.1：改成整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
+# v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
+# v4.1：整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
 # v4.0：本地账号（用户名+密码，PBKDF2 哈希），每账号每天 3 次 AI 解析。
 # v3.7：同一份简历只解析一次、全站每日总额度、输入截断与超时。
 #
@@ -16,6 +17,7 @@ from pathlib import Path
 import streamlit as st
 from openai import OpenAI
 
+import docs
 import quota
 import users
 
@@ -212,11 +214,15 @@ with st.sidebar:
 
     st.header("📄 我的简历")
 
-    uploaded = st.file_uploader("上传 .txt", type=["txt"])
+    uploaded = st.file_uploader("上传简历（txt / docx / pdf）", type=docs.SUPPORTED)
     resume_text = st.text_area("或直接粘贴", height=160,
                                placeholder="把技能、项目经历粘进来……")
     if uploaded is not None:
-        resume_text = uploaded.read().decode("utf-8", errors="ignore")
+        ok, text_or_msg = docs.to_text(uploaded.name, uploaded.getvalue())
+        if ok:
+            resume_text = text_or_msg
+        else:
+            st.error(text_or_msg)
 
     col_a, col_b = st.columns(2)
     with col_a:
