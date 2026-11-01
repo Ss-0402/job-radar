@@ -1,7 +1,8 @@
-# 岗位雷达 v4.0 · 部署版
+# 岗位雷达 v4.1 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
-# v4.0：本地账号（用户名+密码），浏览免费，AI 解析需登录且每账号每天 3 次。
+# v4.1：改成整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
+# v4.0：本地账号（用户名+密码，PBKDF2 哈希），每账号每天 3 次 AI 解析。
 # v3.7：同一份简历只解析一次、全站每日总额度、输入截断与超时。
 #
 # 运行（本地）：streamlit run app.py
@@ -17,6 +18,9 @@ from openai import OpenAI
 
 import quota
 import users
+
+# 页面级配置必须是第一条 Streamlit 命令
+st.set_page_config(page_title="岗位雷达", page_icon="🎯")
 
 HERE = Path(__file__).resolve().parent
 DATA_FILE = HERE / "jd.json"
@@ -114,7 +118,7 @@ def match_score(job, mine):
 
 # ============================================================
 # 账号（本地用户名 + 密码，不做邮箱验证）
-# 浏览、筛选、规则匹配都不需要登录；只有 AI 解析要求登录并计入每日额度。
+# 未登录只能看到登录页；登录后才能进入岗位列表。
 # ============================================================
 
 if "user" not in st.session_state:
@@ -131,7 +135,7 @@ def _login_form() -> None:
     with tab_login:
         name = st.text_input("用户名", key="li_name")
         pwd = st.text_input("密码", type="password", key="li_pwd")
-        if st.button("登录", use_container_width=True, key="li_btn"):
+        if st.button("登录", use_container_width=True, key="li_btn", type="primary"):
             ok, info = users.authenticate(USERS_FILE, name, pwd)
             if ok:
                 st.session_state.user = name.strip().lower()
@@ -157,7 +161,33 @@ def _login_form() -> None:
                     st.error(info)
 
 
+def _login_page() -> None:
+    """整页登录：隐藏侧栏，只留中间一栏。"""
+    st.markdown(
+        "<style>[data-testid='stSidebar']{display:none;}"
+        "[data-testid='collapsedControl']{display:none;}</style>",
+        unsafe_allow_html=True,
+    )
+
+    _, mid, _ = st.columns([1, 1.3, 1])
+    with mid:
+        st.markdown("## 🎯 岗位雷达")
+        st.caption("上传简历，AI 抽出技能，按匹配度给 60 条岗位排序")
+        st.write("")
+        _login_form()
+        st.write("")
+        st.caption(
+            f"每个账号每天 {FREE_PER_DAY} 次免费 AI 解析 · 规则匹配不限次 · "
+            "账号仅用于演示，不发送验证邮件"
+        )
+
+    st.stop()
+
+
 USER = _current_user()
+
+if not USER:
+    _login_page()
 
 
 # ============================================================
@@ -174,15 +204,10 @@ if "parsed_text" not in st.session_state:
 # 五、侧边栏
 # ============================================================
 with st.sidebar:
-    if USER:
-        st.caption(f"👤 {users.display_name(USERS_FILE, USER)}")
-        if st.button("退出登录", use_container_width=True, key="logout"):
-            st.session_state.user = None
-            st.rerun()
-    else:
-        with st.expander("登录 / 注册", expanded=False):
-            st.caption(f"登录后可每天免费 AI 解析 {FREE_PER_DAY} 次；不登录也能浏览岗位。")
-            _login_form()
+    st.caption(f"👤 {users.display_name(USERS_FILE, USER)}")
+    if st.button("退出登录", use_container_width=True, key="logout"):
+        st.session_state.user = None
+        st.rerun()
 
     st.header("📄 我的简历")
 
@@ -199,11 +224,6 @@ with st.sidebar:
                 st.warning("先粘贴简历")
             elif client is None:
                 st.warning("未配置 API Key，只能用规则匹配")
-            elif not USER:
-                st.warning(
-                    f"AI 解析需要先登录：展开上方「登录 / 注册」，"
-                    f"每个账号每天 {FREE_PER_DAY} 次免费。规则匹配不用登录。"
-                )
             elif st.session_state.parsed and st.session_state.parsed_text == resume_text:
                 st.info("这份简历已经解析过，直接复用上次结果（不再花钱）")
             elif not quota.try_take(QUOTA_FILE, USER, FREE_PER_DAY, DAILY_CAP):
@@ -227,11 +247,9 @@ with st.sidebar:
 
     if client is None:
         st.caption("未配置 API Key：只用规则匹配，不发请求。")
-    elif USER:
+    else:
         left = quota.remaining(QUOTA_FILE, USER, FREE_PER_DAY)
         st.caption(f"今日免费 AI 解析剩余 {left} / {FREE_PER_DAY} 次")
-    else:
-        st.caption(f"未登录：可浏览、可规则匹配；登录后每天 {FREE_PER_DAY} 次 AI 解析。")
 
     if st.session_state.parsed:
         my_skills = set(st.session_state.parsed.get("skills", []))
