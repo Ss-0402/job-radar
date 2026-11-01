@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
+  </style>
+</head>
+<body>
+<script>
+  /*
+   * Streamlit 与数据存储之间的桥。
+   *
+   * 为什么存在：sessionStorage 只能在浏览器里读写，Python 读不到。
+   * 这个组件把 sessionStorage 里的登录凭证读出来交给 Streamlit，
+   * 或者按 Python 的指令写入 / 清除。
+   *
+   * sessionStorage 的语义正好是产品要的：
+   *   - F5 刷新：还在（同一标签页）
+   *   - 关闭标签页 / 关闭浏览器：浏览器自动删除
+   *   - 不同标签页互相独立
+   */
+  (function () {
+    var KEY = "jr_auth";
+    var HEIGHT = 0;
+
+    function send(type, payload) {
+      var msg = { isStreamlitMessage: true, type: type };
+      if (payload) {
+        for (var k in payload) {
+          if (Object.prototype.hasOwnProperty.call(payload, k)) msg[k] = payload[k];
+        }
+      }
+      window.parent.postMessage(msg, "*");
+    }
+
+    function height() {
+      send("streamlit:setFrameHeight", { height: HEIGHT });
+    }
+
+    function handle(args) {
+      var mode = (args && args.mode) || "get";
+      var value = "";
+      try {
+        if (mode === "set") {
+          sessionStorage.setItem(KEY, args.token || "");
+          value = args.token || "";
+        } else if (mode === "clear") {
+          sessionStorage.removeItem(KEY);
+          value = "";
+        } else {
+          value = sessionStorage.getItem(KEY) || "";
+        }
+      } catch (err) {
+        // 隐私模式等场景下 sessionStorage 可能不可用：按“没有凭证”处理
+        value = "";
+      }
+      send("streamlit:setComponentValue", { value: value, dataType: "json" });
+      height();
+    }
+
+    window.addEventListener("message", function (event) {
+      var data = event.data;
+      if (!data || data.type !== "streamlit:render") return;
+      handle(data.args);
+    });
+
+    send("streamlit:componentReady", { apiVersion: 1 });
+    height();
+  })();
+</script>
+</body>
+</html>

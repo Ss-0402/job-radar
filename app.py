@@ -1,7 +1,7 @@
 # 岗位雷达 v4.3 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
-# v4.4：登录凭证放会话 cookie（不出现在地址栏，关浏览器即失效），刷新免重登。
+# v4.5：登录凭证存进浏览器 sessionStorage（刷新保留 / 关标签页即退出，不进地址栏）。
 # v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
 # v4.1：整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
 # v4.0：本地账号（用户名+密码，PBKDF2 哈希），每账号每天 3 次 AI 解析。
@@ -127,14 +127,15 @@ def match_score(job, mine):
 # 登录状态写进浏览器 cookie（HMAC 签名，7 天），刷新页面不用重新登录。
 # ============================================================
 
-COOKIE_NAME = "jr_auth"          # 登录凭证的 cookie 名
-TOKEN_HOURS = 12                 # 服务端兜底有效期（cookie 本身是会话级）
-BUILD_TAG = "v4.4"               # 版本标记：用来确认线上跑的是哪一版
+TOKEN_HOURS = 12                 # 凭证兜底有效期
+BUILD_TAG = "v4.5"               # 版本标记：用来确认线上跑的是哪一版
+STORAGE_ENABLED = os.getenv("JOB_RADAR_STORAGE", "on") != "off"
 
 if "user" not in st.session_state:
     st.session_state.user = None        # 登录后存用户名（小写键）
 
 _SECRET_CACHE: str | None = None
+_STORAGE = None
 
 
 def _auth_secret() -> str:
@@ -157,42 +158,67 @@ def _auth_secret() -> str:
     return _SECRET_CACHE
 
 
-def _cookie_js(value: str, max_age: int | None = None) -> None:
-    """写/清 cookie。
+def _storage(**kwargs):
+    """浏览器 sessionStorage 桥（见 auth_store/index.html）。
 
-    st.iframe 的 sandbox 含 allow-scripts + allow-same-origin，所以这段 script
-    落在本站域名下。不传 max_age 就是会话 cookie：刷新还在、关浏览器即消失，
-    不会像长期 cookie 那样留下可以长期复用的凭证。
+    用它而不是 cookie：会话 cookie 关闭标签页不会被清，
+    而产品要求“关标签页 / 关浏览器都要退出登录”。
     """
-    attrs = f"{COOKIE_NAME}={value}; path=/; SameSite=Lax"
-    if max_age is not None:
-        attrs += f"; max-age={max_age}"
-    st.iframe(f"<script>document.cookie='{attrs}';</script>", height=1)
+    global _STORAGE
+    if _STORAGE is None:
+        import streamlit.components.v1 as components
+
+        _STORAGE = components.declare_component(
+            "auth_store", path=str(HERE / "auth_store")
+        )
+    return _STORAGE(default=None, **kwargs)
+
+
+def _resolve_token(token) -> str:
+    """cookie/storage 里的凭证 → 用户名；无效返回空串。"""
+    if not token:
+        return ""
+    name = tokens.verify(token, _auth_secret())
+    if name and users.exists(USERS_FILE, name):
+        return name
+    return ""
 
 
 def _restore_login() -> None:
-    """刷新页面后从 cookie 恢复登录（只读 cookie，不碰地址栏）。"""
+    """尝试从 sessionStorage 恢复登录。
+
+    刻意不阻塞：组件回值前照常显示登录页，拿到有效凭证后再跳进主界面。
+    这样即使浏览器端组件异常，最差也只是“要重新登录”，不会卡在等待页。
+    """
     if st.session_state.pop("just_logged_out", False):
-        _cookie_js("", 0)               # 退出登录：立刻作废
+        if STORAGE_ENABLED:
+            _storage(mode="clear", key="auth_clear")
+        st.session_state.auth_probed = True
         return
-    if st.session_state.user:
+
+    if (
+        st.session_state.user
+        or st.session_state.get("auth_probed")
+        or not STORAGE_ENABLED
+    ):
         return
-    try:
-        token = st.context.cookies.get(COOKIE_NAME)
-    except Exception:
-        token = None
-    if not token:
+
+    stored = _storage(mode="get", key="auth_get")
+    if stored is None:                  # 组件还没回值，这一轮先当未登录
         return
-    name = tokens.verify(token, _auth_secret())
-    if name and users.exists(USERS_FILE, name):
+
+    st.session_state.auth_probed = True
+    name = _resolve_token(stored)
+    if name:
         st.session_state.user = name
+        st.rerun()
 
 
 def _persist_login() -> None:
-    """登录成功后的下一次运行再写 cookie，避免 st.rerun 把 iframe 提前拆掉。"""
+    """登录成功后把凭证写进 sessionStorage（下一次运行执行，避免被 rerun 拆掉）。"""
     pending = st.session_state.pop("pending_token", None)
-    if pending:
-        _cookie_js(pending)
+    if pending and STORAGE_ENABLED:
+        _storage(mode="set", token=pending, key="auth_set")
 
 
 def _current_user() -> str:
@@ -257,9 +283,9 @@ def _login_page() -> None:
         st.write("")
         st.caption(
             f"每个账号每天 {FREE_PER_DAY} 次免费 AI 解析 · 规则匹配不限次 · "
-            "勾选后刷新不用重新登录"
+            "刷新页面不用重新登录"
         )
-        st.caption("登录凭证只存在本浏览器的 cookie 里，不出现在地址栏，关闭浏览器即失效。")
+        st.caption("登录凭证只存在当前标签页里：刷新保留，关闭标签页或浏览器即退出。")
         st.caption(f"构建 {BUILD_TAG}")
 
     st.stop()
