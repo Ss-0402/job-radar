@@ -149,6 +149,7 @@ def _login_form() -> None:
         rpwd = st.text_input("密码", type="password", key="rg_pwd",
                              help=f"至少 {users.MIN_PASSWORD} 位")
         rpwd2 = st.text_input("确认密码", type="password", key="rg_pwd2")
+        st.caption("演示账号，请勿使用你在其他网站的密码。")
         if st.button("注册并登录", use_container_width=True, key="rg_btn"):
             if rpwd != rpwd2:
                 st.error("两次输入的密码不一致")
