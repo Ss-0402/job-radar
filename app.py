@@ -1,7 +1,7 @@
 # 岗位雷达 v4.3 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
-# v4.3：登录状态写进签名 cookie（7 天），刷新页面/重开标签页不用重新登录。
+# v4.3：登录状态用签名凭证持久化（地址栏 ?u=），刷新页面不用重新登录。
 # v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
 # v4.1：整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
 # v4.0：本地账号（用户名+密码，PBKDF2 哈希），每账号每天 3 次 AI 解析。
@@ -127,7 +127,7 @@ def match_score(job, mine):
 # 登录状态写进浏览器 cookie（HMAC 签名，7 天），刷新页面不用重新登录。
 # ============================================================
 
-COOKIE_NAME = "jr_auth"
+TOKEN_PARAM = "u"                # 地址栏里的登录凭证参数名
 REMEMBER_DAYS = 7
 
 if "user" not in st.session_state:
@@ -137,7 +137,7 @@ _SECRET_CACHE: str | None = None
 
 
 def _auth_secret() -> str:
-    """签名密钥：优先 Secrets，其次环境变量，最后进程内随机（重启后旧 cookie 失效）。"""
+    """签名密钥：优先 Secrets，其次环境变量，最后进程内随机（重启后旧 token 失效）。"""
     global _SECRET_CACHE
     if _SECRET_CACHE:
         return _SECRET_CACHE
@@ -156,28 +156,22 @@ def _auth_secret() -> str:
     return _SECRET_CACHE
 
 
-def _cookie_js(value: str, max_age: int) -> None:
-    """在浏览器里写/清 cookie。
-
-    st.iframe 渲染的 HTML 与页面同源（官方明确说明允许 JS 与同源访问），
-    所以这段 script 写的是站点域名下的 cookie，刷新后能读到。
-    """
-    st.iframe(
-        f"<script>document.cookie='{COOKIE_NAME}={value}; path=/; "
-        f"max-age={max_age}; SameSite=Lax';</script>",
-        height=1,
-    )
-
-
 def _restore_login() -> None:
-    """刷新页面后从 cookie 恢复登录状态。"""
+    """刷新页面后从地址栏 token 恢复登录。
+
+    为什么不用 cookie：st.iframe 里的 script 写 document.cookie 会被浏览器拦掉
+    （沙箱 iframe），实测刷新后拿不到。地址栏参数不依赖 JS，刷新必然保留。
+    """
+    if st.session_state.pop("just_logged_out", False):
+        try:
+            st.query_params.pop(TOKEN_PARAM, None)   # 退出登录：立刻清掉地址栏凭证
+        except Exception:
+            pass
+        return
     if st.session_state.user:
         return
-    if st.session_state.pop("just_logged_out", False):
-        _cookie_js("", 0)               # 退出登录：把 cookie 立刻作废
-        return
     try:
-        token = st.context.cookies.get(COOKIE_NAME)
+        token = st.query_params.get(TOKEN_PARAM)
     except Exception:
         token = None
     if not token:
@@ -185,14 +179,23 @@ def _restore_login() -> None:
     name = tokens.verify(token, _auth_secret())
     if name and users.exists(USERS_FILE, name):
         st.session_state.user = name
+    else:
+        try:
+            st.query_params.pop(TOKEN_PARAM, None)   # 失效凭证不留在地址栏
+        except Exception:
+            pass
 
 
-def _write_pending_cookie() -> None:
-    """登录成功后的下一次运行才写 cookie——避免 st.rerun 把组件 iframe 提前拆掉。"""
-    pending = st.session_state.pop("remember_user", None)
-    if pending:
-        token = tokens.make(pending, _auth_secret(), REMEMBER_DAYS)
-        _cookie_js(token, REMEMBER_DAYS * 86400)
+def _persist_login() -> None:
+    """登录成功后的下一次运行，把签名凭证写进地址栏（刷新即可恢复）。"""
+    pending = st.session_state.pop("pending_token", None)
+    if not pending:
+        return
+    try:
+        if st.query_params.get(TOKEN_PARAM) != pending:
+            st.query_params[TOKEN_PARAM] = pending
+    except Exception:
+        pass
 
 
 def _current_user() -> str:
@@ -211,7 +214,9 @@ def _login_form() -> None:
             if ok:
                 st.session_state.user = name.strip().lower()
                 if remember:
-                    st.session_state.remember_user = st.session_state.user
+                    st.session_state.pending_token = tokens.make(
+                        st.session_state.user, _auth_secret(), REMEMBER_DAYS
+                    )
                 st.rerun()
             else:
                 st.error(info)
@@ -230,7 +235,9 @@ def _login_form() -> None:
                 ok, info = users.register(USERS_FILE, rname, rpwd)
                 if ok:
                     st.session_state.user = rname.strip().lower()
-                    st.session_state.remember_user = st.session_state.user
+                    st.session_state.pending_token = tokens.make(
+                        st.session_state.user, _auth_secret(), REMEMBER_DAYS
+                    )
                     st.rerun()
                 else:
                     st.error(info)
@@ -253,14 +260,15 @@ def _login_page() -> None:
         st.write("")
         st.caption(
             f"每个账号每天 {FREE_PER_DAY} 次免费 AI 解析 · 规则匹配不限次 · "
-            f"登录状态在本浏览器保留 {REMEMBER_DAYS} 天"
+            f"登录状态保留 {REMEMBER_DAYS} 天"
         )
+        st.caption("⚠️ 记住登录后地址栏会带一段凭证，别把这样的链接直接发给别人。")
 
     st.stop()
 
 
 _restore_login()
-_write_pending_cookie()
+_persist_login()
 
 USER = _current_user()
 
