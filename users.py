@@ -70,6 +70,11 @@ def display_name(path, username: str) -> str:
     return rec.get("name", username) if isinstance(rec, dict) else username
 
 
+def exists(path, username: str) -> bool:
+    """账号是否还在（cookie 里的旧 token 可能指向已消失的账号）。"""
+    return (username or "").strip().lower() in load(path)
+
+
 def register(path, username: str, password: str) -> tuple[bool, str]:
     """注册。返回 (成功, 提示语或显示名)。"""
     name = (username or "").strip()

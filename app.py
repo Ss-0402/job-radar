@@ -1,6 +1,7 @@
-# 岗位雷达 v4.2 · 部署版
+# 岗位雷达 v4.3 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
+# v4.3：登录状态写进签名 cookie（7 天），刷新页面/重开标签页不用重新登录。
 # v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
 # v4.1：整页登录——未登录只有登录/注册界面，登录后才能进入岗位列表。
 # v4.0：本地账号（用户名+密码，PBKDF2 哈希），每账号每天 3 次 AI 解析。
@@ -12,6 +13,7 @@
 import json
 import os
 import re
+import secrets as pysecrets
 from pathlib import Path
 
 import streamlit as st
@@ -19,6 +21,7 @@ from openai import OpenAI
 
 import docs
 import quota
+import tokens
 import users
 
 # 页面级配置必须是第一条 Streamlit 命令
@@ -121,10 +124,75 @@ def match_score(job, mine):
 # ============================================================
 # 账号（本地用户名 + 密码，不做邮箱验证）
 # 未登录只能看到登录页；登录后才能进入岗位列表。
+# 登录状态写进浏览器 cookie（HMAC 签名，7 天），刷新页面不用重新登录。
 # ============================================================
+
+COOKIE_NAME = "jr_auth"
+REMEMBER_DAYS = 7
 
 if "user" not in st.session_state:
     st.session_state.user = None        # 登录后存用户名（小写键）
+
+_SECRET_CACHE: str | None = None
+
+
+def _auth_secret() -> str:
+    """签名密钥：优先 Secrets，其次环境变量，最后进程内随机（重启后旧 cookie 失效）。"""
+    global _SECRET_CACHE
+    if _SECRET_CACHE:
+        return _SECRET_CACHE
+    for getter in (
+        lambda: st.secrets["AUTH_SECRET"],
+        lambda: os.getenv("JOB_RADAR_AUTH_SECRET"),
+    ):
+        try:
+            value = str(getter() or "")
+            if value:
+                _SECRET_CACHE = value
+                return value
+        except Exception:
+            continue
+    _SECRET_CACHE = pysecrets.token_hex(32)
+    return _SECRET_CACHE
+
+
+def _cookie_js(value: str, max_age: int) -> None:
+    """在浏览器里写/清 cookie。
+
+    st.iframe 渲染的 HTML 与页面同源（官方明确说明允许 JS 与同源访问），
+    所以这段 script 写的是站点域名下的 cookie，刷新后能读到。
+    """
+    st.iframe(
+        f"<script>document.cookie='{COOKIE_NAME}={value}; path=/; "
+        f"max-age={max_age}; SameSite=Lax';</script>",
+        height=1,
+    )
+
+
+def _restore_login() -> None:
+    """刷新页面后从 cookie 恢复登录状态。"""
+    if st.session_state.user:
+        return
+    if st.session_state.pop("just_logged_out", False):
+        _cookie_js("", 0)               # 退出登录：把 cookie 立刻作废
+        return
+    try:
+        token = st.context.cookies.get(COOKIE_NAME)
+    except Exception:
+        token = None
+    if not token:
+        return
+    name = tokens.verify(token, _auth_secret())
+    if name and users.exists(USERS_FILE, name):
+        st.session_state.user = name
+
+
+def _write_pending_cookie() -> None:
+    """登录成功后的下一次运行才写 cookie——避免 st.rerun 把组件 iframe 提前拆掉。"""
+    pending = st.session_state.pop("remember_user", None)
+    if pending:
+        token = tokens.make(pending, _auth_secret(), REMEMBER_DAYS)
+        _cookie_js(token, REMEMBER_DAYS * 86400)
 
 
 def _current_user() -> str:
@@ -137,10 +205,13 @@ def _login_form() -> None:
     with tab_login:
         name = st.text_input("用户名", key="li_name")
         pwd = st.text_input("密码", type="password", key="li_pwd")
+        remember = st.checkbox(f"记住我 {REMEMBER_DAYS} 天", value=True, key="li_remember")
         if st.button("登录", use_container_width=True, key="li_btn", type="primary"):
             ok, info = users.authenticate(USERS_FILE, name, pwd)
             if ok:
                 st.session_state.user = name.strip().lower()
+                if remember:
+                    st.session_state.remember_user = st.session_state.user
                 st.rerun()
             else:
                 st.error(info)
@@ -159,6 +230,7 @@ def _login_form() -> None:
                 ok, info = users.register(USERS_FILE, rname, rpwd)
                 if ok:
                     st.session_state.user = rname.strip().lower()
+                    st.session_state.remember_user = st.session_state.user
                     st.rerun()
                 else:
                     st.error(info)
@@ -181,11 +253,14 @@ def _login_page() -> None:
         st.write("")
         st.caption(
             f"每个账号每天 {FREE_PER_DAY} 次免费 AI 解析 · 规则匹配不限次 · "
-            "账号仅用于演示，不发送验证邮件"
+            f"登录状态在本浏览器保留 {REMEMBER_DAYS} 天"
         )
 
     st.stop()
 
+
+_restore_login()
+_write_pending_cookie()
 
 USER = _current_user()
 
@@ -210,6 +285,7 @@ with st.sidebar:
     st.caption(f"👤 {users.display_name(USERS_FILE, USER)}")
     if st.button("退出登录", use_container_width=True, key="logout"):
         st.session_state.user = None
+        st.session_state.just_logged_out = True
         st.rerun()
 
     st.header("📄 我的简历")
