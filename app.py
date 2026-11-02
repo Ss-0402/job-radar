@@ -1,6 +1,7 @@
-# 岗位雷达 v4.6 · 部署版
+﻿# 岗位雷达 v4.7 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
+# v4.7：登录页与侧栏零散小字合并成「用户须知 / 关于」折叠区，视觉更干净。
 # v4.6：主区改成分页 + JD 弹窗，单次渲染元素从 ~600 降到 ~70，交互明显变快。
 # v4.5：登录凭证存进浏览器 sessionStorage（刷新保留 / 关标签页即退出，不进地址栏）。
 # v4.2：简历支持 txt / docx / pdf 上传（扫描件会给出明确提示）。
@@ -130,7 +131,7 @@ def match_score(job, mine):
 # ============================================================
 
 TOKEN_HOURS = 12                 # 凭证兜底有效期
-BUILD_TAG = "v4.6"               # 版本标记：用来确认线上跑的是哪一版
+BUILD_TAG = "v4.7"               # 版本标记：用来确认线上跑的是哪一版
 STORAGE_ENABLED = os.getenv("JOB_RADAR_STORAGE", "on") != "off"
 
 if "user" not in st.session_state:
@@ -250,9 +251,8 @@ def _login_form() -> None:
         rname = st.text_input("用户名", key="rg_name",
                               help="3–20 位，字母、数字、下划线或中文")
         rpwd = st.text_input("密码", type="password", key="rg_pwd",
-                             help=f"至少 {users.MIN_PASSWORD} 位")
+                             help=f"至少 {users.MIN_PASSWORD} 位，别用其他网站的密码")
         rpwd2 = st.text_input("确认密码", type="password", key="rg_pwd2")
-        st.caption("演示账号，请勿使用你在其他网站的密码。")
         if st.button("注册并登录", use_container_width=True, key="rg_btn"):
             if rpwd != rpwd2:
                 st.error("两次输入的密码不一致")
@@ -269,26 +269,38 @@ def _login_form() -> None:
 
 
 def _login_page() -> None:
-    """整页登录：隐藏侧栏，只留中间一栏。"""
+    """整页登录：隐藏侧栏，中间一张卡片。"""
     st.markdown(
         "<style>[data-testid='stSidebar']{display:none;}"
         "[data-testid='collapsedControl']{display:none;}</style>",
         unsafe_allow_html=True,
     )
 
-    _, mid, _ = st.columns([1, 1.3, 1])
+    _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
-        st.markdown("## 🎯 岗位雷达")
-        st.caption("上传简历，AI 抽出技能，按匹配度给 60 条岗位排序")
         st.write("")
-        _login_form()
-        st.write("")
-        st.caption(
-            f"每个账号每天 {FREE_PER_DAY} 次免费 AI 解析 · 规则匹配不限次 · "
-            "刷新页面不用重新登录"
-        )
-        st.caption("登录凭证只存在当前标签页里：刷新保留，关闭标签页或浏览器即退出。")
-        st.caption(f"构建 {BUILD_TAG}")
+        st.markdown("### 🎯 岗位雷达")
+        st.markdown("上传简历，按 60 条岗位的匹配度排序，看出你还缺什么。")
+
+        with st.container(border=True):
+            _login_form()
+
+        with st.expander("📋 用户须知"):
+            st.markdown(
+                f"""
+**免费额度**　每个账号每天 {FREE_PER_DAY} 次 AI 解析，规则匹配不限次。
+
+**登录用途**　仅用于识别账号和计次，不收邮箱、不发验证邮件。
+
+**密码**　演示账号，请勿使用你在其他网站的密码。
+
+**登录状态**　只保存在当前标签页：刷新保留，关闭标签页或浏览器即退出。
+
+**数据**　岗位为模拟数据，仅用于演示。
+
+当前版本 `{BUILD_TAG}`
+"""
+            )
 
     st.stop()
 
@@ -380,16 +392,14 @@ with st.sidebar:
             left = quota.remaining(QUOTA_FILE, USER, FREE_PER_DAY)
             st.caption(f"今日 AI 解析剩余 {left}/{FREE_PER_DAY}")
 
-    if st.session_state.parsed:
-        my_skills = set(st.session_state.parsed.get("skills", []))
-        st.success(f"已识别 {len(my_skills)} 项技能")
-    else:
-        my_skills = set(rule_extract(resume_text or "")["skills"])
-        if my_skills:
-            st.caption(f"规则识别到 {len(my_skills)} 项技能（点 AI 解析更准）")
-
+    my_skills = (
+        set(st.session_state.parsed.get("skills", []))
+        if st.session_state.parsed
+        else set(rule_extract(resume_text or "")["skills"])
+    )
     if my_skills:
-        st.caption("、".join(sorted(my_skills)))
+        source = "AI" if st.session_state.parsed else "规则"
+        st.caption(f"{source}识别 {len(my_skills)} 项：{'、'.join(sorted(my_skills))}")
 
     with st.expander("🔍 筛选", expanded=False):
         dir_options = sorted({j["direction"] for j in JOBS})
@@ -398,7 +408,8 @@ with st.sidebar:
         sel_cities = st.multiselect("城市", city_options)
         sel_degs = st.multiselect("学历要求", ["大专", "本科", "硕士"])
 
-    st.caption(f"构建 {BUILD_TAG}")
+    with st.expander("ℹ️ 关于"):
+        st.caption(f"岗位雷达 {BUILD_TAG} · 岗位为模拟数据，仅用于演示")
 
 # ============================================================
 # 六、筛选
