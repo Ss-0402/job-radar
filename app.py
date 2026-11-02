@@ -1,6 +1,7 @@
-﻿# 岗位雷达 v4.8 · 部署版
+﻿# 岗位雷达 v4.9 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
+# v4.9：示例岗位换成 18 条真实长度的 JD（320–430 字），弹窗不再重复渲染。
 # v4.8：刷新时先显示过渡页，不再闪一下登录表单。
 # v4.7：登录页与侧栏零散小字合并成「用户须知 / 关于」折叠区，视觉更干净。
 # v4.6：主区改成分页 + JD 弹窗，单次渲染元素从 ~600 降到 ~70，交互明显变快。
@@ -132,7 +133,7 @@ def match_score(job, mine):
 # ============================================================
 
 TOKEN_HOURS = 12                 # 凭证兜底有效期
-BUILD_TAG = "v4.8"               # 版本标记：用来确认线上跑的是哪一版
+BUILD_TAG = "v4.9"               # 版本标记：用来确认线上跑的是哪一版
 STORAGE_ENABLED = os.getenv("JOB_RADAR_STORAGE", "on") != "off"
 
 if "user" not in st.session_state:
@@ -304,7 +305,7 @@ def _login_page() -> None:
     with mid:
         st.write("")
         st.markdown("### 🎯 岗位雷达")
-        st.markdown("上传简历，按 60 条岗位的匹配度排序，看出你还缺什么。")
+        st.markdown("上传简历，按岗位示例池的匹配度排序，看出你还缺什么。")
 
         with st.container(border=True):
             _login_form()
@@ -433,7 +434,7 @@ with st.sidebar:
         city_options = sorted({j["city"] for j in JOBS})
         sel_dirs = st.multiselect("岗位方向", dir_options)
         sel_cities = st.multiselect("城市", city_options)
-        sel_degs = st.multiselect("学历要求", ["大专", "本科", "硕士"])
+        sel_degs = st.multiselect("学历要求", sorted({j["degree"] for j in JOBS}))
 
     with st.expander("ℹ️ 关于"):
         st.caption(f"岗位雷达 {BUILD_TAG} · 岗位为模拟数据，仅用于演示")
@@ -461,7 +462,6 @@ def _jd_dialog(job) -> None:
     st.markdown(f"**{job['title']}**")
     st.caption(f"{job['company']} · {job['city']} · {job['degree']} · {job['direction']}")
     st.markdown(highlight(job["jd"], job["skills"]))
-    st.code(job["jd"], language=None)
 
 
 st.title("🎯 岗位雷达")
@@ -520,4 +520,4 @@ if remaining > 0:
         st.rerun()
 
 st.divider()
-st.caption("数据为模拟岗位，仅用于演示；真实项目请替换 jd.json。")
+st.caption("岗位为虚构示例，用于演示匹配流程。")
