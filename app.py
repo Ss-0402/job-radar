@@ -1,6 +1,7 @@
-﻿# 岗位雷达 v4.7 · 部署版
+﻿# 岗位雷达 v4.8 · 部署版
 # 数据与代码分离：岗位数据在 jd.json，改数据不用碰代码。
 #
+# v4.8：刷新时先显示过渡页，不再闪一下登录表单。
 # v4.7：登录页与侧栏零散小字合并成「用户须知 / 关于」折叠区，视觉更干净。
 # v4.6：主区改成分页 + JD 弹窗，单次渲染元素从 ~600 降到 ~70，交互明显变快。
 # v4.5：登录凭证存进浏览器 sessionStorage（刷新保留 / 关标签页即退出，不进地址栏）。
@@ -131,7 +132,7 @@ def match_score(job, mine):
 # ============================================================
 
 TOKEN_HOURS = 12                 # 凭证兜底有效期
-BUILD_TAG = "v4.7"               # 版本标记：用来确认线上跑的是哪一版
+BUILD_TAG = "v4.8"               # 版本标记：用来确认线上跑的是哪一版
 STORAGE_ENABLED = os.getenv("JOB_RADAR_STORAGE", "on") != "off"
 
 if "user" not in st.session_state:
@@ -187,34 +188,57 @@ def _resolve_token(token) -> str:
     return ""
 
 
-def _restore_login() -> None:
+def _restore_login() -> str:
     """尝试从 sessionStorage 恢复登录。
 
-    刻意不阻塞：组件回值前照常显示登录页，拿到有效凭证后再跳进主界面。
-    这样即使浏览器端组件异常，最差也只是“要重新登录”，不会卡在等待页。
+    返回：
+      "app"     —— 已登录，正常渲染主界面
+      "login"   —— 没登录，渲染登录页
+      "probing" —— 组件还没回值，渲染过渡页（避免先闪一下登录页）
     """
     if st.session_state.pop("just_logged_out", False):
         if STORAGE_ENABLED:
             _storage(mode="clear", key="auth_clear")
         st.session_state.auth_probed = True
-        return
+        return "login"
 
-    if (
-        st.session_state.user
-        or st.session_state.get("auth_probed")
-        or not STORAGE_ENABLED
-    ):
-        return
+    if st.session_state.user:
+        return "app"
+    if st.session_state.get("auth_probed") or not STORAGE_ENABLED:
+        return "login"
 
     stored = _storage(mode="get", key="auth_get")
-    if stored is None:                  # 组件还没回值，这一轮先当未登录
-        return
+    if stored is None:                  # 组件还没回值：给过渡页，别画登录表单
+        return "probing"
 
     st.session_state.auth_probed = True
     name = _resolve_token(stored)
     if name:
         st.session_state.user = name
-        st.rerun()
+        return "app"
+    return "login"
+
+
+def _probing_screen() -> None:
+    """过渡页：只显示标题和一句提示，避免登录页一闪而过。
+
+    带一个「直接登录」兜底按钮——万一浏览器端组件失效，用户不会卡死。
+    """
+    st.markdown(
+        "<style>[data-testid='stSidebar']{display:none;}"
+        "[data-testid='collapsedControl']{display:none;}</style>",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.write("")
+        st.markdown("### 🎯 岗位雷达")
+        st.write("")
+        st.markdown("进入中…")
+        if st.button("直接登录", use_container_width=True):
+            st.session_state.auth_probed = True
+            st.rerun()
+    st.stop()
 
 
 def _persist_login() -> None:
@@ -305,7 +329,10 @@ def _login_page() -> None:
     st.stop()
 
 
-_restore_login()
+_auth_state = _restore_login()
+if _auth_state == "probing":
+    _probing_screen()
+
 _persist_login()
 
 USER = _current_user()
